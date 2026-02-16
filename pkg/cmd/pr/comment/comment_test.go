@@ -269,6 +269,79 @@ func TestNewCmdComment(t *testing.T) {
 			isTTY:    true,
 			wantsErr: true,
 		},
+		// Inline comment flag validation tests
+		{
+			name:     "path without line",
+			input:    "1 --body test --path src/file.ts",
+			isTTY:    true,
+			wantsErr: true,
+		},
+		{
+			name:     "line without path",
+			input:    "1 --body test --line 42",
+			isTTY:    true,
+			wantsErr: true,
+		},
+		{
+			name:     "side without path",
+			input:    "1 --body test --side LEFT",
+			isTTY:    true,
+			wantsErr: true,
+		},
+		{
+			name:     "invalid side value",
+			input:    "1 --body test --path src/file.ts --line 42 --side INVALID",
+			isTTY:    true,
+			wantsErr: true,
+		},
+		{
+			name:     "path and line without body",
+			input:    "1 --path src/file.ts --line 42",
+			isTTY:    true,
+			wantsErr: true,
+		},
+		{
+			name:     "path with web flag",
+			input:    "1 --body test --path src/file.ts --line 42 --web",
+			isTTY:    true,
+			wantsErr: true,
+		},
+		{
+			name:     "path with editor flag",
+			input:    "1 --body test --path src/file.ts --line 42 --editor",
+			isTTY:    true,
+			wantsErr: true,
+		},
+		{
+			name:     "path with edit-last flag",
+			input:    "1 --body test --path src/file.ts --line 42 --edit-last",
+			isTTY:    true,
+			wantsErr: true,
+		},
+		{
+			name:     "path with delete-last flag",
+			input:    "1 --body test --path src/file.ts --line 42 --delete-last",
+			isTTY:    true,
+			wantsErr: true,
+		},
+		{
+			name:     "invalid line format",
+			input:    "1 --body test --path src/file.ts --line abc",
+			isTTY:    true,
+			wantsErr: true,
+		},
+		{
+			name:     "invalid line range format",
+			input:    "1 --body test --path src/file.ts --line 20-10",
+			isTTY:    true,
+			wantsErr: true,
+		},
+		{
+			name:     "negative line number",
+			input:    "1 --body test --path src/file.ts --line -5",
+			isTTY:    true,
+			wantsErr: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -737,4 +810,217 @@ func mockCommentDelete(t *testing.T, reg *httpmock.Registry) {
 			},
 		),
 	)
+}
+
+func Test_parseLineRange(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		wantStart int
+		wantEnd   int
+		wantErr   bool
+	}{
+		{
+			name:      "single line",
+			input:     "42",
+			wantStart: 42,
+			wantEnd:   42,
+			wantErr:   false,
+		},
+		{
+			name:      "line range",
+			input:     "10-20",
+			wantStart: 10,
+			wantEnd:   20,
+			wantErr:   false,
+		},
+		{
+			name:      "same start and end",
+			input:     "5-5",
+			wantStart: 5,
+			wantEnd:   5,
+			wantErr:   false,
+		},
+		{
+			name:    "invalid single line",
+			input:   "abc",
+			wantErr: true,
+		},
+		{
+			name:    "invalid start in range",
+			input:   "abc-20",
+			wantErr: true,
+		},
+		{
+			name:    "invalid end in range",
+			input:   "10-xyz",
+			wantErr: true,
+		},
+		{
+			name:    "start greater than end",
+			input:   "20-10",
+			wantErr: true,
+		},
+		{
+			name:    "zero line number",
+			input:   "0",
+			wantErr: true,
+		},
+		{
+			name:    "negative line number",
+			input:   "-5",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			start, end, err := parseLineRange(tt.input)
+			if tt.wantErr {
+				assert.Error(t, err)
+				return
+			}
+			assert.NoError(t, err)
+			assert.Equal(t, tt.wantStart, start)
+			assert.Equal(t, tt.wantEnd, end)
+		})
+	}
+}
+
+func Test_runInlineComment(t *testing.T) {
+	tests := []struct {
+		name       string
+		line       string
+		side       string
+		httpStubs  func(*testing.T, *httpmock.Registry)
+		wantStdout string
+		wantErr    bool
+	}{
+		{
+			name: "single line comment on added code",
+			line: "42",
+			side: "RIGHT",
+			httpStubs: func(t *testing.T, reg *httpmock.Registry) {
+				reg.Register(
+					httpmock.GraphQL(`query PullRequestByNumber\b`),
+					httpmock.StringResponse(`{
+						"data": {
+							"repository": {
+								"pullRequest": {
+									"id": "PR_123",
+									"number": 123,
+									"headRefOid": "abc123def456"
+								}
+							}
+						}
+					}`),
+				)
+				reg.Register(
+					httpmock.REST("POST", "repos/OWNER/REPO/pulls/123/comments"),
+					httpmock.RESTPayload(201, `{"html_url": "https://github.com/OWNER/REPO/pull/123#discussion_r123"}`, func(payload map[string]interface{}) {
+						assert.Equal(t, "test comment", payload["body"])
+						assert.Equal(t, "abc123def456", payload["commit_id"])
+						assert.Equal(t, "src/file.ts", payload["path"])
+						assert.Equal(t, float64(42), payload["line"])
+						assert.Equal(t, "RIGHT", payload["side"])
+					}),
+				)
+			},
+			wantStdout: "https://github.com/OWNER/REPO/pull/123#discussion_r123\n",
+		},
+		{
+			name: "single line comment on deleted code",
+			line: "15",
+			side: "LEFT",
+			httpStubs: func(t *testing.T, reg *httpmock.Registry) {
+				reg.Register(
+					httpmock.GraphQL(`query PullRequestByNumber\b`),
+					httpmock.StringResponse(`{
+						"data": {
+							"repository": {
+								"pullRequest": {
+									"id": "PR_123",
+									"number": 123,
+									"headRefOid": "abc123def456"
+								}
+							}
+						}
+					}`),
+				)
+				reg.Register(
+					httpmock.REST("POST", "repos/OWNER/REPO/pulls/123/comments"),
+					httpmock.RESTPayload(201, `{"html_url": "https://github.com/OWNER/REPO/pull/123#discussion_r456"}`, func(payload map[string]interface{}) {
+						assert.Equal(t, "test comment", payload["body"])
+						assert.Equal(t, "LEFT", payload["side"])
+						assert.Equal(t, float64(15), payload["line"])
+					}),
+				)
+			},
+			wantStdout: "https://github.com/OWNER/REPO/pull/123#discussion_r456\n",
+		},
+		{
+			name: "multi-line comment",
+			line: "10-20",
+			side: "RIGHT",
+			httpStubs: func(t *testing.T, reg *httpmock.Registry) {
+				reg.Register(
+					httpmock.GraphQL(`query PullRequestByNumber\b`),
+					httpmock.StringResponse(`{
+						"data": {
+							"repository": {
+								"pullRequest": {
+									"id": "PR_123",
+									"number": 123,
+									"headRefOid": "abc123def456"
+								}
+							}
+						}
+					}`),
+				)
+				reg.Register(
+					httpmock.REST("POST", "repos/OWNER/REPO/pulls/123/comments"),
+					httpmock.RESTPayload(201, `{"html_url": "https://github.com/OWNER/REPO/pull/123#discussion_r789"}`, func(payload map[string]interface{}) {
+						assert.Equal(t, "test comment", payload["body"])
+						assert.Equal(t, float64(20), payload["line"])
+						assert.Equal(t, "RIGHT", payload["side"])
+						assert.Equal(t, float64(10), payload["start_line"])
+						assert.Equal(t, "RIGHT", payload["start_side"])
+					}),
+				)
+			},
+			wantStdout: "https://github.com/OWNER/REPO/pull/123#discussion_r789\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ios, _, stdout, _ := iostreams.Test()
+
+			reg := &httpmock.Registry{}
+			defer reg.Verify(t)
+			if tt.httpStubs != nil {
+				tt.httpStubs(t, reg)
+			}
+
+			f := &cmdutil.Factory{
+				IOStreams:  ios,
+				HttpClient: func() (*http.Client, error) { return &http.Client{Transport: reg}, nil },
+				BaseRepo:   func() (ghrepo.Interface, error) { return ghrepo.New("OWNER", "REPO"), nil },
+			}
+
+			inlineOpts := &InlineOptions{
+				Path: "src/file.ts",
+				Line: tt.line,
+				Side: tt.side,
+			}
+
+			err := runInlineComment(f, ios, "123", "test comment", inlineOpts)
+			if tt.wantErr {
+				assert.Error(t, err)
+				return
+			}
+			assert.NoError(t, err)
+			assert.Equal(t, tt.wantStdout, stdout.String())
+		})
+	}
 }

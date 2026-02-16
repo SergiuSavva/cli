@@ -1,0 +1,36 @@
+# Setup environment variables used for testscript
+env REPO=${SCRIPT_NAME}-${RANDOM_STRING}
+
+# Use gh as a credential helper
+exec gh auth setup-git
+
+# Create a repository with a file so it has a default branch
+exec gh repo create ${ORG}/${REPO} --add-readme --private
+
+# Defer repo cleanup
+defer gh repo delete --yes ${ORG}/${REPO}
+
+# Clone the repo
+exec gh repo clone ${ORG}/${REPO}
+
+# Prepare a branch with file changes to PR
+cd ${REPO}
+exec git checkout -b feature-branch
+
+# Create a file with multiple lines
+exec sh -c 'printf "line 1\nline 2\nline 3\nline 4\nline 5\n" > test.txt'
+exec git add test.txt
+exec git commit -m 'Add test.txt'
+exec git push -u origin feature-branch
+
+# Create the PR
+exec gh pr create --title 'Add test file' --body 'Adding a test file'
+stdout2env PR_URL
+
+# Add an inline comment on line 3
+exec gh pr comment ${PR_URL} --body 'Consider renaming this' --path 'test.txt' --line 3
+
+# Verify the comment was created (outputs URL)
+stdout 'github.com'
+stdout 'discussion'
+

@@ -1105,6 +1105,56 @@ func SuggestedReviewerActors(client *Client, repo ghrepo.Interface, prID string,
 	return candidates, moreResults, nil
 }
 
+// PRReviewCommentInput contains parameters for creating a pull request review comment (inline comment).
+type PRReviewCommentInput struct {
+	Body      string
+	CommitID  string
+	Path      string
+	Line      int
+	Side      string // "LEFT" for deleted lines, "RIGHT" for added lines
+	StartLine int    // For multi-line comments, the first line of the range
+	StartSide string // For multi-line comments, the side of the first line
+}
+
+// CreatePRReviewComment creates an inline comment on a pull request diff using the REST API.
+func CreatePRReviewComment(client *Client, repo ghrepo.Interface, prNumber int, input PRReviewCommentInput) (string, error) {
+	path := fmt.Sprintf(
+		"repos/%s/%s/pulls/%d/comments",
+		url.PathEscape(repo.RepoOwner()),
+		url.PathEscape(repo.RepoName()),
+		prNumber,
+	)
+
+	body := map[string]interface{}{
+		"body":      input.Body,
+		"commit_id": input.CommitID,
+		"path":      input.Path,
+		"line":      input.Line,
+		"side":      input.Side,
+	}
+
+	// Add multi-line fields if StartLine is set
+	if input.StartLine > 0 {
+		body["start_line"] = input.StartLine
+		body["start_side"] = input.StartSide
+	}
+
+	buf := &bytes.Buffer{}
+	if err := json.NewEncoder(buf).Encode(body); err != nil {
+		return "", err
+	}
+
+	var result struct {
+		HTMLURL string `json:"html_url"`
+	}
+	err := client.REST(repo.RepoHost(), "POST", path, buf, &result)
+	if err != nil {
+		return "", err
+	}
+
+	return result.HTMLURL, nil
+}
+
 func UpdatePullRequestBranch(client *Client, repo ghrepo.Interface, params githubv4.UpdatePullRequestBranchInput) error {
 	var mutation struct {
 		UpdatePullRequestBranch struct {
